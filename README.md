@@ -29,7 +29,7 @@ prompt-cache break at forget time, savings on every turn after.
 ## Install
 
 ```bash
-hermes plugins install <you>/hermes-plugin-forget-context --enable
+hermes plugins install https://github.com/lejean2000/hermes-plugin-forget-context --enable
 hermes config set context.engine forget
 ```
 
