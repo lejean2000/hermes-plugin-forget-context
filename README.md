@@ -43,6 +43,7 @@ any time with `hermes config set context.engine compressor`.
 | arg | meaning |
 | --- | ------- |
 | `tool_call_id` | forget this one result |
+| `index` | tiebreaker: transcript index from `list_tool_results`, when several entries share one `tool_call_id` |
 | `tool_name` | forget results from this tool (e.g. `snowflake_query`) |
 | `keep_last_n` | with `tool_name`: keep the newest N, forget the rest (default 0) |
 | `min_chars` | only touch results at/above this size (default 2000, 0 disables) |
@@ -50,7 +51,10 @@ any time with `hermes config set context.engine compressor`.
 | `dry_run` | report what would be forgotten, change nothing |
 
 At least one of `tool_call_id` / `tool_name` is required. Re-forgetting an
-already-forgotten result is a safe no-op skip, and every failure returns a JSON
+already-forgotten result is a safe no-op skip. If several entries share one
+`tool_call_id` (some backends synthesize non-unique ids), the call is refused
+with the candidates listed — retry with `index` to pick exactly one, never
+wiping several on a one-entry request. Every failure returns a JSON
 error string — the tool never raises.
 
 ## Layout

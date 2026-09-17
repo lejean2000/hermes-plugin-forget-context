@@ -99,6 +99,15 @@ def _index_tool_results(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "chars": _content_chars(content),
             "forgotten": _is_forgotten(content),
         })
+    # Backends may synthesize non-session-unique ids (e.g. hash of name + args
+    # + position); flag entries sharing an id so selectors can refuse ambiguity
+    # instead of wiping several results on a one-result request.
+    seen: Dict[str, int] = {}
+    for e in entries:
+        if e["tool_call_id"]:
+            seen[e["tool_call_id"]] = seen.get(e["tool_call_id"], 0) + 1
+    for e in entries:
+        e["ambiguous_id"] = bool(e["tool_call_id"]) and seen.get(e["tool_call_id"], 0) > 1
     return entries
 
 
@@ -125,7 +134,13 @@ class ForgetCompressor(ContextCompressor):
         fresh = type(self).__new__(type(self))
         memo[id(self)] = fresh
         ContextCompressor.__init__(
-            fresh, model=getattr(self, "model", "") or "", quiet_mode=True)
+            fresh, model=getattr(self, "model", "") or "",
+            # Preserve the instance flag: the host never sets quiet_mode on
+            # plugin engines after construction, so a hardcoded value here would
+            # permanently silence (True) or enable (False) the base class's
+            # user-visible notices regardless of user settings. Default False
+            # matches the base constructor and stock Hermes behavior.
+            quiet_mode=bool(getattr(self, "quiet_mode", False)))
         return fresh
 
     # -- engine tools ------------------------------------------------------
@@ -146,7 +161,11 @@ class ForgetCompressor(ContextCompressor):
                     "properties": {
                         "tool_call_id": {
                             "type": "string",
-                            "description": "Forget this one result (its tool_call_id).",
+                            "description": "Forget this one result (its tool_call_id). Refused when several entries share the id unless index picks one.",
+                        },
+                        "index": {
+                            "type": "integer",
+                            "description": "Tiebreaker: transcript index from list_tool_results, when several entries share one tool_call_id.",
                         },
                         "tool_name": {
                             "type": "string",
@@ -243,6 +262,23 @@ class ForgetCompressor(ContextCompressor):
             targets = [e for e in entries if e["tool_call_id"] == tool_call_id]
             if not targets:
                 return {"success": False, "error": f"tool_call_id not in context: {tool_call_id}"}
+            if len(targets) > 1:
+                # Ambiguous selector on a destructive op: never wipe several
+                # entries on a one-entry request. `index` (transcript position
+                # from list_tool_results, stable under append-only growth)
+                # picks exactly one.
+                index = args.get("index")
+                picked = ([e for e in targets if e["index"] == index]
+                          if isinstance(index, int) and not isinstance(index, bool) else [])
+                if len(picked) != 1:
+                    return {"success": False,
+                            "error": (f"tool_call_id {tool_call_id!r} matches {len(targets)} entries; "
+                                      "retry with index to pick exactly one."),
+                            "candidates": [
+                                {"index": e["index"], "tool_name": e["tool_name"],
+                                 "chars": e["chars"], "forgotten": e["forgotten"]}
+                                for e in targets]}
+                targets = picked
         else:
             matching = [e for e in entries if e["tool_name"] == tool_name]
             if not matching:
@@ -280,6 +316,9 @@ def register(ctx) -> None:
     """General-plugin entry point: register our engine (single slot; a second
     engine plugin would be rejected by the host with a warning)."""
     try:
-        ctx.register_context_engine(ForgetCompressor(model="", quiet_mode=True))
+        # Default construction (quiet_mode=False, matching the base class and
+        # stock Hermes). Do NOT force quiet_mode=True here: the host never
+        # corrects it on plugin engines afterwards.
+        ctx.register_context_engine(ForgetCompressor(model=""))
     except Exception as exc:  # never break plugin discovery
         logger.warning("forget-context: engine registration failed: %s", exc)
