@@ -1,0 +1,4 @@
+name: forget-context
+version: 1.0.0
+description: "Agent-controlled context relief: forget_tool_result drops large tool outputs (e.g. Snowflake dumps) from context. Subclasses the built-in compressor, so all default compression behavior is inherited."
+author: "local"
